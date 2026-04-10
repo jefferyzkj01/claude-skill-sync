@@ -4,7 +4,7 @@ A Claude Code skill that syncs your skills and plugins across devices using your
 
 ## Quickstart
 
-**Just paste this URL into Claude Code and say "安裝這個 skill" (or "install this skill"):**
+**Just paste this URL into Claude Code and tell claude code install this skill**
 
 ```
 https://github.com/jefferyzkj01/claude-skill-sync
