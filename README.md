@@ -2,21 +2,43 @@
 
 A Claude Code skill that syncs your skills and plugins across devices using your own private GitHub repo.
 
-## Install
+## Quickstart
 
-```bash
-# As a Claude Code plugin (recommended):
-/plugin marketplace add jefferyzkj01/skill-sync
-/plugin install skill-sync@skill-sync --scope user
+**Just paste this URL into Claude Code and say "安裝這個 skill" (or "install this skill"):**
+
+```
+https://github.com/jefferyzkj01/claude-skill-sync
 ```
 
-Or manually:
+Claude will install it automatically. Then tell Claude **"sync my skills"** to begin setup.
+
+---
+
+## How it works across devices
+
+**First device:**
+1. Give Claude the URL above → it installs the skill
+2. Tell Claude "sync my skills" → guided setup:
+   - SSH key check
+   - Creates your private `claude-skills` repo on GitHub
+   - Pushes all skills + plugin metadata
+
+**New device:**
+1. Give Claude the same URL → it installs the skill
+2. Tell Claude "sync my skills" → it asks for your private repo SSH URL
+3. Detects existing content → restores all skills + prints plugin reinstall commands
+4. Run the printed plugin commands → restart Claude Code → done
+
+---
+
+## Manual Install
+
 ```bash
 mkdir -p ~/.claude/skills/skill-sync/scripts
 curl -Lo ~/.claude/skills/skill-sync/SKILL.md \
-  https://raw.githubusercontent.com/jefferyzkj01/skill-sync/main/SKILL.md
+  https://raw.githubusercontent.com/jefferyzkj01/claude-skill-sync/main/SKILL.md
 curl -Lo ~/.claude/skills/skill-sync/scripts/sync.sh \
-  https://raw.githubusercontent.com/jefferyzkj01/skill-sync/main/scripts/sync.sh
+  https://raw.githubusercontent.com/jefferyzkj01/claude-skill-sync/main/scripts/sync.sh
 chmod +x ~/.claude/skills/skill-sync/scripts/sync.sh
 ```
 
