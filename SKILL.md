@@ -5,152 +5,179 @@ description: Sync Claude Code skills AND plugins across devices using a private 
 
 # Skill Sync
 
-Synchronizes `~/.claude/skills/` and plugin metadata to a private GitHub repo via SSH.
-Plugin cache is NOT synced (too large) — plugins are re-installed from metadata on new devices.
+Syncs `~/.claude/skills/` and plugin metadata to the user's private GitHub repo.
+**Claude handles all operations directly — the user never needs to open a terminal.**
 
 ## What gets synced
 
 ```
-Your private GitHub repo/
-├── skills/          ← ~/.claude/skills/ (full copy)
+User's private GitHub repo/
+├── skills/          ← ~/.claude/skills/
 ├── plugins/
-│   ├── installed_plugins.json    ← which plugins are installed + versions
-│   └── known_marketplaces.json   ← registered marketplaces
-└── devices.log      ← device registry
+│   ├── installed_plugins.json
+│   └── known_marketplaces.json
+├── bootstrap.sh     ← new device restore script
+└── devices.log
 ```
 
 ---
 
-## Script location
+## How Claude Should Operate
+
+**Always use Bash tool to execute operations directly.** Never tell the user to run commands themselves. Do it for them in the conversation.
+
+---
+
+## Workflow 1 — First Time Setup (no private repo yet)
+
+Detect: `~/.claude/skills-repo/.git` does not exist AND no `~/.claude/skill-sync.conf`
 
 ```
-~/.claude/skills/skill-sync/scripts/sync.sh
+1. Tell user what skill-sync does (one short paragraph)
+
+2. Check SSH:
+   Run: ssh -T git@github.com 2>&1 || true
+   - If authenticated → proceed
+   - If not → run: ssh-keygen -t ed25519 -C "claude-skill-sync" -f ~/.ssh/id_ed25519 -N ""
+     Then show public key: cat ~/.ssh/id_ed25519.pub
+     Ask user to add it at https://github.com/settings/ssh/new
+     Wait for user confirmation, then verify: ssh -T git@github.com 2>&1 || true
+
+3. Ask user to create a private GitHub repo:
+   "Please go to https://github.com/new, name it 'claude-skills', set to Private, leave empty, then paste me the SSH URL (git@github.com:yourname/claude-skills.git)"
+
+4. Clone and push:
+   git clone <url> ~/.claude/skills-repo
+   cp -r ~/.claude/skills/. ~/.claude/skills-repo/skills/
+   mkdir -p ~/.claude/skills-repo/plugins
+   cp ~/.claude/plugins/installed_plugins.json ~/.claude/skills-repo/plugins/ 2>/dev/null || true
+   cp ~/.claude/plugins/known_marketplaces.json ~/.claude/skills-repo/plugins/ 2>/dev/null || true
+   Write bootstrap.sh (see Bootstrap Script section below)
+   Update devices.log
+   cd ~/.claude/skills-repo && git add -A && git commit -m "init: first sync from $(hostname)" && git push
+
+5. Save config: echo "SKILL_SYNC_REPO=<url>" > ~/.claude/skill-sync.conf
+
+6. Tell user: "Done! Your skills are backed up. On a new device, just install this skill and tell me 'sync my skills'."
 ```
 
 ---
 
-## Commands
+## Workflow 2 — Push (existing repo, push local changes)
 
-| Command | What it does |
-|---------|-------------|
-| `init <repo_url>` | First-time setup: connect to your private repo (or create one) |
-| `push` | Commit and push skills + plugin metadata to GitHub |
-| `pull` | Pull from GitHub, restore skills + print plugin reinstall commands |
-| `status` | Show local vs remote diff |
-| `devices` | List all devices that have synced |
+Detect: `~/.claude/skills-repo/.git` exists
+
+```
+1. cd ~/.claude/skills-repo && git fetch origin
+2. Check if behind remote → warn user if so
+3. cp -r ~/.claude/skills/. ~/.claude/skills-repo/skills/
+4. cp ~/.claude/plugins/installed_plugins.json ~/.claude/skills-repo/plugins/ 2>/dev/null || true
+5. cp ~/.claude/plugins/known_marketplaces.json ~/.claude/skills-repo/plugins/ 2>/dev/null || true
+6. Update devices.log
+7. git add -A
+8. Show what changed (git diff --staged --name-only)
+9. git commit -m "sync: push from $(hostname) at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+10. git push
+11. Report: "Pushed N files to GitHub."
+```
 
 ---
 
-## First-Time Setup
+## Workflow 3 — Pull / New Device (repo exists remotely, not locally)
 
-### Step 1 — Install this skill (already done if you're reading this)
+Detect: `~/.claude/skills-repo/.git` does not exist but user provides a repo URL
 
-### Step 2 — Set up SSH key for GitHub
+```
+1. Check SSH (same as Workflow 1 step 2)
+2. Ask for private repo SSH URL if not known
+3. git clone <url> ~/.claude/skills-repo
+4. cp -r ~/.claude/skills-repo/skills/. ~/.claude/skills/
+5. cp ~/.claude/skills-repo/plugins/installed_plugins.json ~/.claude/plugins/ 2>/dev/null || true
+6. cp ~/.claude/skills-repo/plugins/known_marketplaces.json ~/.claude/plugins/ 2>/dev/null || true
+7. Update devices.log and push
+8. Read installed_plugins.json and run each plugin install:
+   - For each marketplace in known_marketplaces.json: claude plugin marketplace add <repo>
+   - For each plugin in installed_plugins.json: claude plugin install <key> --scope <scope>
+9. Save ~/.claude/skill-sync.conf
+10. Tell user: "All skills restored and plugins reinstalled. Please restart Claude Code."
+```
+
+---
+
+## Workflow 4 — Status
+
+```
+1. cd ~/.claude/skills-repo && git fetch origin --quiet
+2. cp -r ~/.claude/skills/. ~/.claude/skills-repo/skills/ (staging only)
+3. git diff --name-only → show modified
+4. git ls-files --others --exclude-standard → show local-only
+5. git diff HEAD..origin/main --name-only → show remote-newer
+6. git checkout -- . (restore repo to committed state)
+7. Show summary table
+```
+
+---
+
+## Devices Log Format
+
+```
+HOSTNAME\tOS\tTIMESTAMP
+```
+
+Update before every commit:
+```bash
+log=~/.claude/skills-repo/devices.log
+device=$(hostname)
+ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+os=$(uname -s)
+touch "$log"
+grep -v "^${device}	" "$log" > "${log}.tmp" 2>/dev/null || true
+printf "%s\t%s\t%s\n" "$device" "$os" "$ts" >> "${log}.tmp"
+mv "${log}.tmp" "$log"
+```
+
+---
+
+## Bootstrap Script
+
+Write this to `~/.claude/skills-repo/bootstrap.sh` during first init.
+This lets new devices restore with one command even before Claude is set up:
 
 ```bash
-ssh-keygen -t ed25519 -C "your@email.com"
-cat ~/.ssh/id_ed25519.pub   # copy this
-# Add to: https://github.com/settings/ssh/new
-ssh -T git@github.com       # verify: "Hi yourname!"
-```
-
-### Step 3 — Create your private repo
-
-1. Go to https://github.com/new
-2. Name: `claude-skills`
-3. Visibility: **Private** ← important, this holds your personal config
-4. Leave empty (no README)
-5. Click **Create repository**
-6. Copy the SSH URL: `git@github.com:yourname/claude-skills.git`
-
-### Step 4 — Run init
-
-```bash
-bash ~/.claude/skills/skill-sync/scripts/sync.sh init git@github.com:yourname/claude-skills.git
-```
-
-This pushes all your current skills and plugin metadata as the first commit.
-
----
-
-## New Device (already have a private repo)
-
-```bash
-# 1. Set up SSH key (same as Step 2 above)
-
-# 2. Clone and bootstrap — one command:
-git clone git@github.com:yourname/claude-skills.git ~/.claude/skills-repo && bash ~/.claude/skills-repo/bootstrap.sh
-
-# 3. Run the plugin reinstall commands printed by bootstrap
-
-# 4. Restart Claude Code
+#!/usr/bin/env bash
+# bootstrap.sh — restore Claude skills on a new device
+# Usage: git clone git@github.com:you/claude-skills.git ~/.claude/skills-repo && bash ~/.claude/skills-repo/bootstrap.sh
+set -euo pipefail
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+mkdir -p ~/.claude/skills ~/.claude/plugins
+[[ -d "$REPO/skills" ]] && cp -r "$REPO/skills"/. ~/.claude/skills/
+for f in installed_plugins.json known_marketplaces.json; do
+  [[ -f "$REPO/plugins/$f" ]] && cp "$REPO/plugins/$f" ~/.claude/plugins/
+done
+echo "Skills restored. Now tell Claude Code: 'sync my skills' to reinstall plugins."
 ```
 
 ---
 
-## Day-to-Day
+## Config File
 
-### After installing a new skill or plugin
-```bash
-bash ~/.claude/skills/skill-sync/scripts/sync.sh push
+`~/.claude/skill-sync.conf` stores the private repo URL:
+```
+SKILL_SYNC_REPO=git@github.com:user/claude-skills.git
 ```
 
-### Pull on a device that's behind
-```bash
-bash ~/.claude/skills/skill-sync/scripts/sync.sh pull
-```
-
-### Check sync state
-```bash
-bash ~/.claude/skills/skill-sync/scripts/sync.sh status
-```
+Read at start of each workflow to skip asking for URL again.
 
 ---
 
-## Plugin Restore (new device)
-
-After `pull` or `bootstrap`, the script reads `plugins/installed_plugins.json`
-and prints exact commands to reinstall everything. Example:
-
-```
-To restore plugins, run:
-  claude plugin marketplace add obra/superpowers-marketplace
-  claude plugin install superpowers@superpowers-marketplace --scope user
-  claude plugin marketplace add anthropics/skills
-  claude plugin install example-skills@anthropic-agent-skills --scope user
-```
-
----
-
-## Conflict Handling
-
-When `pull` detects both local and remote changed the same skill:
-
-```
-Conflicts detected:
-  ≠ skills/my-skill/SKILL.md
-
-Options:
-  1) Remote wins (overwrite local)
-  2) Local wins (keep local)
-  3) Abort — let me decide manually
-```
-
----
-
-## How Claude Should Help
+## How Claude Should Respond
 
 | User says | Action |
 |-----------|--------|
-| 「第一次設定」/ "first time setup" | Walk through Steps 2-4 above |
-| 「同步我的 skills」/ "sync" | Run `push` |
-| 「新裝置」/ "new device" | Show the one-command bootstrap |
-| 「拉下來」/ "pull" | Run `pull` |
-| 「有衝突」/ "conflict" | Explain options, show diff command |
-| 「查狀態」/ "status" | Run `status` |
-| 「有哪些裝置」/ "devices" | Run `devices` |
+| 「第一次」/ "first time" / no repo found | Workflow 1 |
+| 「同步」/ "sync" / "push" | Workflow 2 if repo exists, else Workflow 1 |
+| 「新裝置」/ "new device" / "pull" | Workflow 3 |
+| 「查狀態」/ "status" | Workflow 4 |
+| 「有哪些裝置」/ "devices" | Read and display devices.log |
 
-**First-time detection:** If `~/.claude/skills-repo` does not exist, proactively
-walk the user through creating a private repo and running `init`.
-
-Always confirm SSH URL is `git@github.com:user/repo.git` (not HTTPS).
+**Key principle: Claude does the work. The user just answers questions.**
