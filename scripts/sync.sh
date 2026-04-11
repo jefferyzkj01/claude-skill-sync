@@ -3,11 +3,12 @@
 # Sync ~/.claude/skills/ + plugin metadata with a private GitHub repo via SSH.
 #
 # Usage:
-#   ./sync.sh init <git@github.com:user/claude-skills.git>
-#   ./sync.sh push        (guided setup if first time)
-#   ./sync.sh pull
-#   ./sync.sh status
-#   ./sync.sh devices
+#   ./sync.sh                 Smart auto-detect (recommended)
+#   ./sync.sh init <git@...>  First-time setup with repo URL
+#   ./sync.sh push            Push local changes to GitHub
+#   ./sync.sh pull            Pull from GitHub
+#   ./sync.sh status          Show sync state
+#   ./sync.sh devices         List registered devices
 
 set -euo pipefail
 
@@ -50,6 +51,78 @@ load_repo_url() {
   echo "${SKILL_SYNC_REPO:-}"
 }
 
+# ── Smart detection: check GitHub for existing claude-skills repo ─────────────
+# Returns SSH URL if a PRIVATE claude-skills repo exists, empty string otherwise
+detect_github_repo() {
+  command -v gh &>/dev/null || { echo ""; return; }
+  gh auth status &>/dev/null || { echo ""; return; }
+
+  local username
+  username=$(gh api user --jq '.login' 2>/dev/null || echo "")
+  [[ -z "$username" ]] && { echo ""; return; }
+
+  local visibility
+  visibility=$(gh api "repos/${username}/claude-skills" --jq '.private' 2>/dev/null || echo "")
+
+  if [[ "$visibility" == "true" ]]; then
+    echo "git@github.com:${username}/claude-skills.git"
+  elif [[ "$visibility" == "false" ]]; then
+    echo "__PUBLIC__"
+  else
+    echo ""
+  fi
+}
+
+# ── Workflow 0: Smart Auto-Detect ─────────────────────────────────────────────
+cmd_auto() {
+  echo ""
+  echo -e "${CYAN}╔══════════════════════════════════════════╗${NC}"
+  echo -e "${CYAN}║        skill-sync — Auto Detecting       ║${NC}"
+  echo -e "${CYAN}╚══════════════════════════════════════════╝${NC}"
+  echo ""
+
+  # 1. Local repo exists → push
+  if [[ -d "$REPO_DIR/.git" ]]; then
+    info "Found local repo at $REPO_DIR → pushing changes..."
+    cmd_push
+    return
+  fi
+
+  # 2. Check saved config
+  local saved_url
+  saved_url=$(load_repo_url)
+  if [[ -n "$saved_url" ]]; then
+    info "Found saved config → restoring from $saved_url"
+    cmd_init "$saved_url"
+    return
+  fi
+
+  # 3. Check GitHub for existing private repo
+  info "No local repo found. Checking GitHub for existing claude-skills repo..."
+  local github_url
+  github_url=$(detect_github_repo)
+
+  if [[ "$github_url" == "__PUBLIC__" ]]; then
+    warn "Found a PUBLIC 'claude-skills' repo on GitHub."
+    warn "skill-sync only works with PRIVATE repos to protect your data."
+    echo ""
+    printf "Continue with first-time setup to create a new private repo? (y/N): "
+    read -r ans
+    [[ "$ans" =~ ^[Yy]$ ]] || { info "Aborted."; exit 0; }
+    onboard_new_user
+  elif [[ -n "$github_url" ]]; then
+    success "Found existing private claude-skills repo on GitHub!"
+    info "Pulling and installing to this device..."
+    echo ""
+    cmd_init "$github_url"
+  else
+    info "No claude-skills repo found on GitHub."
+    info "Starting first-time setup to push local skills..."
+    echo ""
+    onboard_new_user
+  fi
+}
+
 # ── New user onboarding ───────────────────────────────────────────────────────
 onboard_new_user() {
   echo ""
@@ -74,28 +147,43 @@ onboard_new_user() {
     echo "  # Add to: https://github.com/settings/ssh/new"
     echo "  ssh -T git@github.com   # should say 'Hi yourname!'"
     echo ""
-    echo "Once done, run again: bash ~/.claude/skills/skill-sync/scripts/sync.sh init"
+    echo "Once done, run again: bash ~/.claude/skills/skill-sync/scripts/sync.sh"
     exit 0
   fi
 
   echo ""
-  echo -e "${YELLOW}Step 2 — Create your private GitHub repo${NC}"
-  echo ""
-  echo "  1. Open: https://github.com/new"
-  echo "  2. Name it: claude-skills"
-  echo "  3. Set to: Private"
-  echo "  4. Leave empty (no README)"
-  echo "  5. Click 'Create repository'"
-  echo ""
-  printf "Paste your SSH repo URL (git@github.com:yourname/claude-skills.git): "
-  read -r repo_url
+  echo -e "${YELLOW}Step 2 — Creating private GitHub repo...${NC}"
+  local repo_url=""
 
-  [[ -z "$repo_url" ]] && error "No URL provided. Aborting."
+  if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
+    info "gh CLI detected — creating repo automatically..."
+    gh repo create claude-skills --private --description "Claude Code skills backup" 2>/dev/null || \
+      warn "Repo may already exist or creation failed — continuing..."
+    local username
+    username=$(gh api user --jq '.login' 2>/dev/null || echo "")
+    if [[ -n "$username" ]]; then
+      repo_url="git@github.com:${username}/claude-skills.git"
+      success "Repo ready: $repo_url"
+    fi
+  fi
 
-  if ! echo "$repo_url" | grep -q "^git@github.com:"; then
-    warn "Expected format: git@github.com:user/repo.git"
-    printf "Continue anyway? (y/N): "
-    read -r ans; [[ "$ans" =~ ^[Yy]$ ]] || { info "Aborted."; exit 0; }
+  if [[ -z "$repo_url" ]]; then
+    echo ""
+    echo "Please create a private repo manually:"
+    echo "  1. Open: https://github.com/new"
+    echo "  2. Name it: claude-skills"
+    echo "  3. Set to: Private"
+    echo "  4. Leave empty (no README)"
+    echo "  5. Click 'Create repository'"
+    echo ""
+    printf "Paste your SSH repo URL (git@github.com:yourname/claude-skills.git): "
+    read -r repo_url
+    [[ -z "$repo_url" ]] && error "No URL provided. Aborting."
+    if ! echo "$repo_url" | grep -q "^git@github.com:"; then
+      warn "Expected format: git@github.com:user/repo.git"
+      printf "Continue anyway? (y/N): "
+      read -r ans; [[ "$ans" =~ ^[Yy]$ ]] || { info "Aborted."; exit 0; }
+    fi
   fi
 
   cmd_init "$repo_url"
@@ -203,9 +291,9 @@ cmd_init() {
     success "Initial push complete."
     echo ""
     echo -e "${GREEN}Done!${NC} Skills backed up to GitHub."
-    echo "Future syncs: bash ~/.claude/skills/skill-sync/scripts/sync.sh push"
+    echo "Future syncs: bash ~/.claude/skills/skill-sync/scripts/sync.sh"
   else
-    info "Existing content — restoring to $SKILLS_DIR ..."
+    info "Existing content found — restoring to $SKILLS_DIR ..."
     repo_to_skills
     repo_to_plugins_meta
     update_device_log
@@ -213,7 +301,7 @@ cmd_init() {
     git add devices.log
     git commit -m "device: registered ${DEVICE}" 2>/dev/null || true
     git push 2>/dev/null || true
-    success "Skills restored from repo."
+    success "Skills restored from GitHub repo."
     print_plugin_restore_commands
   fi
 
@@ -226,7 +314,7 @@ cmd_push() {
     if [[ -n "$saved_url" ]]; then
       cmd_init "$saved_url"; return
     fi
-    onboard_new_user; return
+    cmd_auto; return
   fi
 
   check_ssh
@@ -269,7 +357,7 @@ cmd_push() {
 }
 
 cmd_pull() {
-  [[ -d "$REPO_DIR/.git" ]] || error "Not initialized. Run: sync.sh init"
+  [[ -d "$REPO_DIR/.git" ]] || error "Not initialized. Run: sync.sh (auto-detect)"
   check_ssh
   cd "$REPO_DIR"
   git fetch origin
@@ -319,7 +407,7 @@ cmd_pull() {
 
 cmd_status() {
   if [[ ! -d "$REPO_DIR/.git" ]]; then
-    warn "Not initialized. Run: sync.sh init"
+    warn "Not initialized. Run: sync.sh (auto-detect)"
     exit 0
   fi
   check_ssh
@@ -351,7 +439,7 @@ cmd_status() {
 }
 
 cmd_devices() {
-  [[ -d "$REPO_DIR/.git" ]] || error "Not initialized. Run: sync.sh init"
+  [[ -d "$REPO_DIR/.git" ]] || error "Not initialized. Run: sync.sh (auto-detect)"
   local log="$REPO_DIR/devices.log"
   [[ -f "$log" ]] || { info "No devices registered yet."; exit 0; }
   echo -e "\n${CYAN}=== Registered Devices ===${NC}"
@@ -366,7 +454,8 @@ cmd_devices() {
 # ── Entry point ───────────────────────────────────────────────────────────────
 check_deps
 
-case "${1:-help}" in
+case "${1:-auto}" in
+  auto)    cmd_auto ;;
   init)    cmd_init "${2:-}" ;;
   push)    cmd_push ;;
   pull)    cmd_pull ;;
@@ -376,6 +465,7 @@ case "${1:-help}" in
     echo -e "${CYAN}skill-sync${NC} — Claude skills + plugins ↔ GitHub"
     echo ""
     echo "Commands:"
+    echo "  (no args)         Smart auto-detect: pull if GitHub repo exists, else push"
     echo "  init              Guided first-time setup"
     echo "  init <repo_url>   First-time setup with repo URL"
     echo "  push              Push local changes to GitHub"
