@@ -28,9 +28,32 @@ User's private GitHub repo/
 
 ---
 
+## Workflow 0 — Smart Auto-Detect (DEFAULT — run this first)
+
+This is the **default entry point** when the user says "sync", "同步", or starts without specifying direction.
+
+```
+Detection order:
+
+1. If ~/.claude/skills-repo/.git exists → go to Workflow 2 (Push)
+
+2. If not, check GitHub for existing private claude-skills repo:
+   Run: gh api user --jq '.login'         (get username)
+   Run: gh api repos/{username}/claude-skills --jq '.private'
+   - Returns "true"  → existing private repo found → go to Workflow 3 (Pull/Restore)
+   - Returns "false" → public repo exists (warn user, do not auto-pull)
+   - Error / empty   → no repo found → go to Workflow 1 (First Time Setup)
+
+3. If gh CLI not available → fall back to Workflow 1 (First Time Setup)
+```
+
+Tell the user which path was detected before proceeding.
+
+---
+
 ## Workflow 1 — First Time Setup (no private repo yet)
 
-Detect: `~/.claude/skills-repo/.git` does not exist AND no `~/.claude/skill-sync.conf`
+Detect: `~/.claude/skills-repo/.git` does not exist AND no `claude-skills` repo on GitHub
 
 ```
 1. Tell user what skill-sync does (one short paragraph)
@@ -43,8 +66,11 @@ Detect: `~/.claude/skills-repo/.git` does not exist AND no `~/.claude/skill-sync
      Ask user to add it at https://github.com/settings/ssh/new
      Wait for user confirmation, then verify: ssh -T git@github.com 2>&1 || true
 
-3. Ask user to create a private GitHub repo:
-   "Please go to https://github.com/new, name it 'claude-skills', set to Private, leave empty, then paste me the SSH URL (git@github.com:yourname/claude-skills.git)"
+3. Create private GitHub repo automatically (if gh CLI available):
+   Run: gh repo create claude-skills --private --description "Claude Code skills backup"
+   Then get SSH URL: gh repo view claude-skills --json sshUrl --jq '.sshUrl'
+   
+   If gh CLI not available → ask user to manually create repo and paste SSH URL
 
 4. Clone and push:
    git clone <url> ~/.claude/skills-repo
@@ -63,7 +89,7 @@ Detect: `~/.claude/skills-repo/.git` does not exist AND no `~/.claude/skill-sync
 
 ---
 
-## Workflow 2 — Push (existing repo, push local changes)
+## Workflow 2 — Push (existing local repo, push local changes)
 
 Detect: `~/.claude/skills-repo/.git` exists
 
@@ -83,23 +109,33 @@ Detect: `~/.claude/skills-repo/.git` exists
 
 ---
 
-## Workflow 3 — Pull / New Device (repo exists remotely, not locally)
+## Workflow 3 — Pull / New Device (repo exists on GitHub, not locally)
 
-Detect: `~/.claude/skills-repo/.git` does not exist but user provides a repo URL
+Detect: `~/.claude/skills-repo/.git` does not exist AND GitHub has private `claude-skills` repo
 
 ```
-1. Check SSH (same as Workflow 1 step 2)
-2. Ask for private repo SSH URL if not known
-3. git clone <url> ~/.claude/skills-repo
-4. cp -r ~/.claude/skills-repo/skills/. ~/.claude/skills/
-5. cp ~/.claude/skills-repo/plugins/installed_plugins.json ~/.claude/plugins/ 2>/dev/null || true
-6. cp ~/.claude/skills-repo/plugins/known_marketplaces.json ~/.claude/plugins/ 2>/dev/null || true
-7. Update devices.log and push
-8. Read installed_plugins.json and run each plugin install:
+1. Get repo SSH URL:
+   username=$(gh api user --jq '.login')
+   repo_url="git@github.com:${username}/claude-skills.git"
+
+2. Check SSH (same as Workflow 1 step 2)
+
+3. Clone: git clone <url> ~/.claude/skills-repo
+
+4. Restore files:
+   cp -r ~/.claude/skills-repo/skills/. ~/.claude/skills/
+   cp ~/.claude/skills-repo/plugins/installed_plugins.json ~/.claude/plugins/ 2>/dev/null || true
+   cp ~/.claude/skills-repo/plugins/known_marketplaces.json ~/.claude/plugins/ 2>/dev/null || true
+
+5. Update devices.log and push
+
+6. Read installed_plugins.json and run each plugin install:
    - For each marketplace in known_marketplaces.json: claude plugin marketplace add <repo>
    - For each plugin in installed_plugins.json: claude plugin install <key> --scope <scope>
-9. Save ~/.claude/skill-sync.conf
-10. Tell user: "All skills restored and plugins reinstalled. Please restart Claude Code."
+
+7. Save ~/.claude/skill-sync.conf
+
+8. Tell user: "All skills restored and plugins reinstalled. Please restart Claude Code."
 ```
 
 ---
@@ -174,9 +210,10 @@ Read at start of each workflow to skip asking for URL again.
 
 | User says | Action |
 |-----------|--------|
-| 「第一次」/ "first time" / no repo found | Workflow 1 |
-| 「同步」/ "sync" / "push" | Workflow 2 if repo exists, else Workflow 1 |
-| 「新裝置」/ "new device" / "pull" | Workflow 3 |
+| 「同步」/ "sync" / "sync my skills" | **Workflow 0** (Smart Auto-Detect) |
+| 「第一次」/ "first time" / no repo anywhere | Workflow 1 |
+| 「推送」/ "push" / "backup" | Workflow 2 if local repo exists, else Workflow 0 |
+| 「新裝置」/ "new device" / "pull" / "restore" | Workflow 3 |
 | 「查狀態」/ "status" | Workflow 4 |
 | 「有哪些裝置」/ "devices" | Read and display devices.log |
 
